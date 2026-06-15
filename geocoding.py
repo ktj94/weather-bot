@@ -55,3 +55,42 @@ async def reverse_geocode(lat: float, lon: float) -> str:
     except Exception as e:
         logger.warning("Reverse geocoding failed: %s", e)
         return f"{lat:.2f}, {lon:.2f}"
+
+SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+
+async def geocode_place(query: str) -> dict | None:
+    """Convert a place name into coordinates."""
+
+    params = {
+        "q": query,
+        "format": "json",
+        "limit": 1,
+        "addressdetails": 1,
+    }
+
+    headers = {"User-Agent": USER_AGENT}
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                SEARCH_URL,
+                params=params,
+                headers=headers,
+            )
+            response.raise_for_status()
+            results = response.json()
+
+        if not results:
+            return None
+
+        result = results[0]
+
+        return {
+            "lat": float(result["lat"]),
+            "lon": float(result["lon"]),
+            "display_name": result["display_name"],
+        }
+
+    except Exception as e:
+        logger.warning("Forward geocoding failed: %s", e)
+        return None

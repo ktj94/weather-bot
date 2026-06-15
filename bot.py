@@ -10,7 +10,7 @@ from telegram.ext import (
     filters,
 )
 
-from geocoding import reverse_geocode
+from geocoding import reverse_geocode, geocode_place
 from utils import format_weather_message
 from weather import get_weather
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "👋 Send me your location and I'll reply with the current weather!"
+        "👋 Send me your location or type a place name and I'll reply with the current weather!"
     )
 
 
@@ -44,6 +44,46 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
 
+async def handle_text_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    query = update.message.text.strip()
+
+    try:
+        location = await geocode_place(query)
+
+        if not location:
+            await update.message.reply_text(
+                "❌ Location not found."
+            )
+            return
+
+        lat = location["lat"]
+        lon = location["lon"]
+
+        weather_data = await get_weather(lat, lon)
+
+        location_name = (
+            f"{location['display_name']}\n"
+            f"📌 {lat:.4f}, {lon:.4f}"
+        )
+
+        message = format_weather_message(
+            location_name,
+            weather_data,
+        )
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+        logger.error(
+            "Error handling text location: %s",
+            e,
+        )
+
+        await update.message.reply_text(
+            "⚠️ Could not fetch weather data."
+        )
+
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("📍 Please share your location to get weather info.")
 
@@ -61,7 +101,8 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
-    app.add_handler(MessageHandler(~filters.COMMAND, handle_unknown))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_location))
+    app.add_handler(MessageHandler(~filters.ALL, handle_unknown))
     app.add_error_handler(error_handler)
 
     logger.info("Bot starting…")
