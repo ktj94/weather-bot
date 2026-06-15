@@ -1,77 +1,260 @@
 # Telegram Weather Bot
 
-A lightweight, self-hosted Telegram bot that replies with current weather when you share your location.
+A lightweight, self-hosted Telegram weather bot that provides current weather conditions based on a shared Telegram location.
 
-## What you get
+Built with:
 
-```
-📍 Amsterdam, Nederland
+* Python 3.12
+* python-telegram-bot
+* Open-Meteo
+* OpenStreetMap Nominatim
+* Docker
+* Docker Compose
+
+---
+
+## Features
+
+### Current Weather
+
+* Temperature
+* Feels-like temperature
+* Humidity
+* Cloud cover percentage
+* Cloud cover description
+* Wind direction (compass)
+* Wind speed in Beaufort and km/h
+* Sunrise
+* Sunset
+
+### Location Handling
+
+* Share your location directly from Telegram
+* High-precision reverse geocoding
+* Neighbourhood/suburb-level location names when available
+
+### Performance
+
+* 5-minute in-memory weather cache
+* Coordinate cache precision of approximately 100 meters
+* Lightweight resource usage
+
+### Deployment
+
+* Dockerized
+* Long polling
+* No database required
+* Suitable for VPS, Raspberry Pi, Proxmox, Docker, Portainer, and Kubernetes
+
+---
+
+## Example Response
+
+```text
+📍 Centrum, Amsterdam, Netherlands
 
 🌡 Temperature: 18.4°C
+🥶 Feels Like: 16.9°C
+
+☁️ Cloud Cover: 35% (Partly cloudy)
 💧 Humidity: 72%
-💨 Wind: SW at 14.0 km/h
+
+💨 Wind: SW
+💨 Speed: Bft 3 (14 km/h)
+
 🌅 Sunrise: 05:18
 🌇 Sunset: 22:03
 ```
 
+---
+
 ## Stack
 
-- Python 3.12
-- [python-telegram-bot](https://python-telegram-bot.org/) (long polling)
-- [Open-Meteo](https://open-meteo.com/) (free, no API key)
-- [Nominatim](https://nominatim.openstreetmap.org/) (reverse geocoding)
-- Docker + docker-compose
+| Component         | Technology          |
+| ----------------- | ------------------- |
+| Bot Framework     | python-telegram-bot |
+| Weather Provider  | Open-Meteo          |
+| Reverse Geocoding | Nominatim           |
+| Containerization  | Docker              |
+| Deployment        | Docker Compose      |
+| Runtime           | Python 3.12         |
 
-## Quick start
+---
 
-1. **Create your bot** — talk to [@BotFather](https://t.me/BotFather) on Telegram and grab your token.
+## Project Structure
 
-2. **Configure**
-
-   ```bash
-   cp .env.example .env
-   # Edit .env and paste your BOT_TOKEN
-   ```
-
-3. **Run**
-
-   ```bash
-   docker compose up -d --build
-   ```
-
-4. **Check logs**
-
-   ```bash
-   docker compose logs -f
-   ```
-
-5. **Send your location** in Telegram — the bot replies with the weather.
-
-## Configuration
-
-| Variable    | Description                         | Default              |
-|-------------|-------------------------------------|----------------------|
-| `BOT_TOKEN` | Telegram bot token from BotFather   | *(required)*         |
-| `TZ`        | Timezone for sunrise/sunset times   | `Europe/Amsterdam`   |
-
-## Project structure
-
-```
+```text
 weather-bot/
-├── bot.py              # Entry point, handlers, polling loop
-├── weather.py          # Open-Meteo API + in-memory cache
-├── geocoding.py        # Nominatim reverse geocoding
-├── utils.py            # Wind direction, message formatting
+├── bot.py
+├── weather.py
+├── geocoding.py
+├── utils.py
 ├── requirements.txt
 ├── Dockerfile
 ├── docker-compose.yml
+├── .env
 ├── .env.example
 └── README.md
 ```
 
-## Notes
+---
 
-- Weather responses are cached for 5 minutes (coordinates rounded to 2 decimals).
-- Reverse geocoding falls back to raw coordinates if Nominatim is unreachable.
-- The container runs as a non-root user.
-- `python -u` ensures unbuffered stdout so `docker logs` works immediately.
+## Setup
+
+### Create Telegram Bot
+
+Message:
+
+https://t.me/BotFather
+
+Create a bot using:
+
+```text
+/newbot
+```
+
+Copy the bot token.
+
+---
+
+### Create Environment File
+
+Create:
+
+```bash
+cp .env.example .env
+```
+
+Edit:
+
+```env
+BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+TZ=Europe/Amsterdam
+```
+
+---
+
+## Local Docker Deployment
+
+Build and start:
+
+```bash
+docker compose up -d --build
+```
+
+View logs:
+
+```bash
+docker compose logs -f
+```
+
+Stop:
+
+```bash
+docker compose down
+```
+
+---
+
+## Portainer Deployment
+
+### Stack Repository
+
+Repository URL:
+
+```text
+git@github.com:ktj94/weather-bot.git
+```
+
+Reference:
+
+```text
+main
+```
+
+Compose Path:
+
+```text
+docker-compose.yml
+```
+
+Environment Variables:
+
+```env
+BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+TZ=Europe/Amsterdam
+```
+
+Deploy the stack.
+
+---
+
+## Weather Data Source
+
+This project uses Open-Meteo:
+
+https://open-meteo.com
+
+No API key required.
+
+---
+
+## Reverse Geocoding
+
+Location names are obtained from OpenStreetMap Nominatim:
+
+https://nominatim.openstreetmap.org
+
+The bot prioritizes:
+
+1. Neighbourhood
+2. Suburb
+3. Quarter
+4. Road
+5. City
+6. Country
+
+to provide the most specific location possible.
+
+---
+
+## Wind Scale
+
+Wind speed is shown using:
+
+* Beaufort Scale (primary)
+* km/h (secondary)
+
+Example:
+
+```text
+💨 Speed: Bft 5 (34 km/h)
+```
+
+---
+
+## Caching
+
+Weather responses are cached for 5 minutes.
+
+Coordinates are rounded to 3 decimal places before caching, providing approximately 100-meter cache granularity.
+
+---
+
+
+## Resource Usage
+
+Typical usage:
+
+```text
+RAM: 50–100 MB
+CPU: Near 0% while idle
+```
+
+Suitable for low-cost VPS deployments.
+
+---
+
+## License
+
+Private project.
