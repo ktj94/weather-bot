@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import json
 
 import httpx
 
@@ -46,6 +47,8 @@ async def get_weather(lat: float, lon: float) -> dict:
         response = await client.get(OPEN_METEO_URL, params=params)
         response.raise_for_status()
         data = response.json()
+
+        logger.info("Full Open-Meteo response:\n%s", json.dumps(data, indent=2))
 
     result = {
         "temperature": data["current"]["temperature_2m"],
