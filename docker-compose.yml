@@ -1,0 +1,12 @@
+services:
+  weather-bot:
+    build: .
+    container_name: weather-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python.*bot.py' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
