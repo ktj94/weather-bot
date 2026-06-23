@@ -3,11 +3,10 @@ services:
     build: .
     container_name: weather-bot
     restart: unless-stopped
-
-    environment:
-      BOT_TOKEN: ${BOT_TOKEN}
-      TZ: ${TZ:-Europe/Amsterdam}
-
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f 'python.*bot.py' || exit 1"]
       interval: 30s
