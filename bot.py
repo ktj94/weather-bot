@@ -10,7 +10,7 @@ from telegram.ext import (
     filters,
 )
 
-from geocoding import reverse_geocode
+from geocoding import reverse_geocode, geocode_place
 from knmi import ensure_station_cache, find_nearest_station, get_knmi_observation
 from utils import format_weather_message
 from weather import get_weather
@@ -66,6 +66,50 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     await update.message.reply_text(message)
 
+async def handle_text_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.message.text.strip()
+
+    try:
+        location = await geocode_place(query)
+
+        if not location:
+            await update.message.reply_text("❌ Location not found.")
+            return
+
+        lat = location["lat"]
+        lon = location["lon"]
+
+        location_name = location["display_name"]
+
+        openmeteo_data = await get_weather(lat, lon)
+
+        knmi_data = None
+        station_name = None
+        station_distance = None
+
+        try:
+            station_id, station_name, station_distance = find_nearest_station(
+                lat, lon
+            )
+            knmi_data = await get_knmi_observation(station_id)
+        except Exception as e:
+            logger.warning("KNMI lookup failed: %s", e)
+
+        message = format_weather_message(
+            location_name,
+            openmeteo_data,
+            knmi=knmi_data,
+            station_name=station_name,
+            station_distance_km=station_distance,
+        )
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+        logger.error("Error handling text location: %s", e)
+        await update.message.reply_text(
+            "⚠️ Could not fetch weather data."
+        )
 
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("📍 Please share your location to get weather info.")
@@ -89,6 +133,7 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_location,))
     app.add_handler(MessageHandler(~filters.COMMAND, handle_unknown))
     app.add_error_handler(error_handler)
 
