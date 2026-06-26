@@ -49,7 +49,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
-
+from utils import cloud_description
 import httpx
 import xarray as xr
 
@@ -390,14 +390,6 @@ def _oktas_to_percent(oktas: float) -> int:
     return max(0, min(100, round((oktas / 8) * 100)))
 
 
-def _cloud_description(pct: int) -> str:
-    if pct <= 20:
-        return "Clear"
-    if pct <= 50:
-        return "Partly cloudy"
-    if pct <= 80:
-        return "Mostly cloudy"
-    return "Overcast"
 
 
 def _degrees_to_compass(degrees: float) -> str:
@@ -448,7 +440,7 @@ def _extract_from_ds(ds: xr.Dataset, wmo_id: str) -> dict:
         "wind_direction": _degrees_to_compass(dd) if dd is not None else None,
         "wind_direction_deg": round(dd) if dd is not None else None,
         "cloud_cover_pct": cloud_pct,
-        "cloud_description": _cloud_description(cloud_pct) if cloud_pct is not None else None,
+        "cloud_description": cloud_description(cloud_pct) if cloud_pct is not None else None,
         "observed_at": observed_at,
     }
 

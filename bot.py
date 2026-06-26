@@ -59,6 +59,8 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     message = format_weather_message(
         location_name,
+        lat,
+        lon,
         openmeteo_data,
         knmi=knmi_data,
         station_name=station_name,
@@ -97,6 +99,8 @@ async def handle_text_location(update: Update, context: ContextTypes.DEFAULT_TYP
 
         message = format_weather_message(
             location_name,
+            lat,
+            lon,
             openmeteo_data,
             knmi=knmi_data,
             station_name=station_name,
