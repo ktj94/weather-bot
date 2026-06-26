@@ -63,7 +63,7 @@ KNMI_OPEN_DATA_BASE = "https://api.dataplatform.knmi.nl/open-data/v1"
 DATASET_NAME = "10-minute-in-situ-meteorological-observations"
 DATASET_VERSION = "1.0"
 
-_DATA_DIR = Path(os.getenv("KNMI_CACHE_PATH", "data/knmi_stations.json")).parent
+_DATA_DIR = Path(os.getenv("KNMI_CACHE_PATH", "/data")).expanduser()
 CACHE_PATH = _DATA_DIR / "knmi_stations.json"
 NC_DISK_PATH = _DATA_DIR / "latest.nc"
 NC_META_PATH = _DATA_DIR / "latest_nc_meta.json"
