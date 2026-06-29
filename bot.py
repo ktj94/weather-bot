@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 
@@ -11,7 +12,7 @@ from telegram.ext import (
 )
 
 from geocoding import reverse_geocode, geocode_place
-from knmi import ensure_station_cache, find_nearest_station, get_knmi_observation
+from knmi import ensure_station_cache, ensure_latest_knmi_data, find_nearest_station, get_knmi_observation
 from utils import format_weather_message
 from weather import get_weather
 
@@ -31,6 +32,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "👋 Send me your location and I'll reply with the current weather!"
     )
+    asyncio.create_task(ensure_latest_knmi_data())
 
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

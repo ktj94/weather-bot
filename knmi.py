@@ -7,14 +7,19 @@ Flow:
     background task checks disk NC cache → downloads fresh if stale →
     extracts station metadata → writes caches to disk. Retries hourly.
 
-  Per request:
+  /start command:
+    Reply immediately → background: ensure_latest_knmi_data()
+      ├── observation stale (filename timestamp > 10 min)?
+      │     └── Yes → download latest .nc, update cache
+      └── No → do nothing
+
+  Per weather request:
     1. find_nearest_station(lat, lon)  → wmo_id (e.g. "06260"), name, distance
-    2. get_knmi_observation(wmo_id) →
-         a. In-memory Dataset fresh?  → use it
-         b. Disk NC file fresh?       → load it
-         c. Otherwise                 → download from KNMI
-         d. On 429                    → fall back to disk/memory (any age)
-         e. Read station row, return observation dict
+    2. get_knmi_observation(wmo_id)  →
+         a. In-memory Dataset present? → use it
+         b. Disk NC file present?      → load it
+         c. Neither                    → download (recovery path only)
+         d. Read station row, return observation dict
 
 Disk cache layout:
   data/
@@ -44,8 +49,8 @@ import json
 import logging
 import math
 import os
+import re
 import tempfile
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -184,7 +189,7 @@ async def _refresh_station_cache_bg() -> None:
     while True:
         try:
             logger.info("Background: refreshing station cache…")
-            ds = await _get_dataset()
+            ds = await _load_or_download_dataset()
             _station_cache = _build_station_cache_from_ds(ds)
             _save_cache(_station_cache)
 
@@ -360,18 +365,48 @@ def _save_nc_to_disk(nc_bytes: bytes, filename: str) -> None:
     logger.info("NC file saved to disk (%s, %d bytes)", filename, len(nc_bytes))
 
 
-def _disk_nc_age_seconds() -> float | None:
-    """Return age of disk NC file in seconds, or None if missing."""
-    if not NC_META_PATH.exists() or not NC_DISK_PATH.exists():
+def _observation_time_from_filename(filename: str) -> datetime | None:
+    """Parse the observation timestamp embedded in the NC filename.
+
+    Example: KMDS__OPER_P___10M_OBS_L2_202606281020.nc → 2026-06-28 10:20 UTC
+    Returns None if the filename doesn't match the expected pattern.
+    """
+    match = re.search(r"(\d{12})\.nc$", filename)
+    if not match:
         return None
     try:
-        meta = json.loads(NC_META_PATH.read_text())
-        downloaded = datetime.fromisoformat(
-            meta["downloaded_at"].replace("Z", "+00:00")
+        return datetime.strptime(match.group(1), "%Y%m%d%H%M").replace(
+            tzinfo=timezone.utc
         )
-        return (datetime.now(timezone.utc) - downloaded).total_seconds()
-    except Exception:
+    except ValueError:
         return None
+
+
+def _observation_is_stale() -> bool:
+    """Return True if the cached observation data is older than NC_TTL_SECONDS.
+
+    Uses the timestamp in the filename (= actual observation time), not
+    downloaded_at. Falls back to True (stale) if the cache is missing or
+    the filename cannot be parsed.
+    """
+    if not NC_META_PATH.exists() or not NC_DISK_PATH.exists():
+        return True
+    try:
+        meta = json.loads(NC_META_PATH.read_text())
+        filename = meta.get("filename", "")
+        obs_time = _observation_time_from_filename(filename)
+        if obs_time is None:
+            logger.warning(
+                "Could not parse observation time from filename %r — treating as stale",
+                filename,
+            )
+            return True
+        age = (datetime.now(timezone.utc) - obs_time).total_seconds()
+        logger.debug("Observation age: %.0fs (filename: %s)", age, filename)
+        return age > NC_TTL_SECONDS
+    except Exception as e:
+        logger.warning("Could not check observation staleness: %s — treating as stale", e)
+        return True
 
 
 def _load_ds_from_disk() -> xr.Dataset | None:
@@ -394,14 +429,13 @@ def _disk_cached_filename() -> str:
         pass
 
     return "unknown"
+
 # ---------------------------------------------------------------------------
 # Dataset extraction
 # ---------------------------------------------------------------------------
 
 def _oktas_to_percent(oktas: float) -> int:
     return max(0, min(100, round((oktas / 8) * 100)))
-
-
 
 
 def _degrees_to_compass(degrees: float) -> str:
@@ -431,8 +465,7 @@ def _extract_from_ds(ds: xr.Dataset, wmo_id: str) -> dict:
     ff = val("ff")
     dd = val("dd")
     n  = val("n")
-    
-    #print("KNMI raw timestamp:", ds.time.values[0])
+
     try:
         ts = ds.time.values[0]
         tz_name = os.getenv("TZ", "Europe/Amsterdam")
@@ -458,16 +491,16 @@ def _extract_from_ds(ds: xr.Dataset, wmo_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Dataset cache (in-memory + disk, 10-minute TTL)
+# Dataset cache (in-memory)
 # ---------------------------------------------------------------------------
 
 _ds_cache: dict = {
     "filename": None,
-    "fetched_at": 0.0,
     "dataset": None,
 }
 _station_index: dict[str, int] = {}
 _ds_lock = asyncio.Lock()
+_nc_refresh_running: bool = False
 
 
 def _build_station_index(ds: xr.Dataset) -> dict[str, int]:
@@ -475,85 +508,94 @@ def _build_station_index(ds: xr.Dataset) -> dict[str, int]:
     return {str(wmo_id): i for i, wmo_id in enumerate(ds.station.values)}
 
 
-def _ds_cache_is_fresh() -> bool:
-    return (
-        _ds_cache["dataset"] is not None
-        and time.monotonic() - _ds_cache["fetched_at"] < NC_TTL_SECONDS
-    )
-
-
 def _populate_memory_cache(ds: xr.Dataset, filename: str) -> None:
     """Update in-memory dataset cache and station index."""
     _ds_cache["filename"] = filename
-    _ds_cache["fetched_at"] = time.monotonic()
     _ds_cache["dataset"] = ds
     _station_index.clear()
     _station_index.update(_build_station_index(ds))
 
 
-async def _get_dataset() -> xr.Dataset:
-    """Return cached Dataset with three-tier lookup:
+async def _load_or_download_dataset() -> xr.Dataset:
+    """Return a Dataset from disk if present, otherwise download from KNMI.
 
-    1. In-memory cache (< 10 min)  →  instant
-    2. Disk NC file    (< 10 min)  →  local read, no API call
-    3. KNMI download                →  3 API calls, saves to disk
-    4. On 429 / failure            →  fall back to disk or memory (any age)
-
-    Uses double-checked locking so concurrent requests only trigger one refresh.
+    This is the recovery/bootstrap path — not the normal read path.
+    Normal reads go through _get_cached_dataset().
     """
-    if _ds_cache_is_fresh():
-        return _ds_cache["dataset"]
-
-    async with _ds_lock:
-        if _ds_cache_is_fresh():
-            return _ds_cache["dataset"]
-
-        # Tier 2: disk cache
-        disk_age = _disk_nc_age_seconds()
-        if disk_age is not None and disk_age < NC_TTL_SECONDS:
-            ds = _load_ds_from_disk()
-            if ds is not None:
-                cached_filename = _disk_cached_filename()
-                logger.info("Loaded dataset from disk (%s, age: %.0fs)", cached_filename, disk_age)
-                _populate_memory_cache(ds, cached_filename)
-                return ds
-
-        # Tier 3: download from KNMI
-        try:
-            filename, nc_bytes = await _fetch_nc_bytes()
-            ds = _parse_nc_bytes(nc_bytes)
-            _save_nc_to_disk(nc_bytes, filename)
-            _populate_memory_cache(ds, filename)
-            logger.info("Dataset cache refreshed (%s)", filename)
-            return ds
-
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                logger.warning("KNMI rate limit (429) — falling back to cache")
-                return _fallback_dataset()
-            raise
-
-        except Exception as e:
-            logger.error("KNMI download failed: %s — falling back to cache", e)
-            return _fallback_dataset()
-
-
-def _fallback_dataset() -> xr.Dataset:
-    """Return the best available stale Dataset, or raise."""
-    # Prefer in-memory (already parsed)
-    if _ds_cache["dataset"] is not None:
-        logger.warning("Using stale in-memory dataset (%s)", _ds_cache["filename"])
-        return _ds_cache["dataset"]
-
-    # Try disk (any age)
     ds = _load_ds_from_disk()
     if ds is not None:
         cached_filename = _disk_cached_filename()
-        logger.warning("Using stale disk dataset (%s)", cached_filename)
+        logger.info("Loaded dataset from disk (%s)", cached_filename)
         _populate_memory_cache(ds, cached_filename)
         return ds
 
-    raise RuntimeError("No KNMI dataset available (API down, no disk cache)")
+    filename, nc_bytes = await _fetch_nc_bytes()
+    ds = _parse_nc_bytes(nc_bytes)
+    _save_nc_to_disk(nc_bytes, filename)
+    _populate_memory_cache(ds, filename)
+    logger.info("Dataset downloaded and cached (%s)", filename)
+    return ds
+
+
+def _get_cached_dataset() -> xr.Dataset | None:
+    """Return the in-memory Dataset if present, otherwise load from disk.
+
+    Returns None if neither is available. Never downloads.
+    """
+    if _ds_cache["dataset"] is not None:
+        return _ds_cache["dataset"]
+
+    ds = _load_ds_from_disk()
+    if ds is not None:
+        cached_filename = _disk_cached_filename()
+        _populate_memory_cache(ds, cached_filename)
+        return ds
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# NC observation freshness + background refresh (called from /start)
+# ---------------------------------------------------------------------------
+
+async def ensure_latest_knmi_data() -> None:
+    """Check whether the cached observations are stale and refresh if needed.
+
+    Safe to call from /start (or anywhere). Returns immediately.
+    A background task does the actual download so the caller is never blocked.
+    Only one refresh runs at a time.
+    """
+    global _nc_refresh_running
+
+    if _nc_refresh_running:
+        logger.debug("NC refresh already in progress — skipping")
+        return
+
+    if not _observation_is_stale():
+        logger.debug(
+            "Observations are fresh (%s) — no refresh needed",
+            _disk_cached_filename(),
+        )
+        return
+
+    _nc_refresh_running = True
+    asyncio.create_task(_refresh_nc_bg())
+
+
+async def _refresh_nc_bg() -> None:
+    """Background task: download the latest .nc file and update caches."""
+    global _nc_refresh_running
+    try:
+        logger.info("Background: refreshing NC observations…")
+        filename, nc_bytes = await _fetch_nc_bytes()
+        ds = _parse_nc_bytes(nc_bytes)
+        _save_nc_to_disk(nc_bytes, filename)
+        _populate_memory_cache(ds, filename)
+        logger.info("Background: NC observations refreshed (%s)", filename)
+    except Exception as e:
+        logger.error("Background: NC refresh failed: %s", e)
+    finally:
+        _nc_refresh_running = False
 
 
 # ---------------------------------------------------------------------------
@@ -563,7 +605,17 @@ def _fallback_dataset() -> xr.Dataset:
 async def get_knmi_observation(wmo_id: str) -> dict:
     """Get latest observation for a station.
 
-    Returns observation dict for the given WMO station ID (e.g. "06260").
+    Reads from the in-memory or disk cache. If neither is available
+    (first run, cache wiped), downloads once as a recovery path.
+    Never checks staleness — that is the responsibility of ensure_latest_knmi_data().
     """
-    ds = await _get_dataset()
+    ds = _get_cached_dataset()
+
+    if ds is None:
+        logger.warning("No cached dataset — downloading as recovery path")
+        async with _ds_lock:
+            ds = _get_cached_dataset()
+            if ds is None:
+                ds = await _load_or_download_dataset()
+
     return _extract_from_ds(ds, wmo_id)
