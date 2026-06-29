@@ -561,8 +561,8 @@ def _get_cached_dataset() -> xr.Dataset | None:
 async def ensure_latest_knmi_data() -> None:
     """Check whether the cached observations are stale and refresh if needed.
 
-    Safe to call from /start (or anywhere). Returns immediately.
-    A background task does the actual download so the caller is never blocked.
+    Awaits the download if a refresh is necessary. The caller decides
+    whether to await this directly or wrap it in asyncio.create_task().
     Only one refresh runs at a time.
     """
     global _nc_refresh_running
@@ -579,7 +579,7 @@ async def ensure_latest_knmi_data() -> None:
         return
 
     _nc_refresh_running = True
-    asyncio.create_task(_refresh_nc_bg())
+    await _refresh_nc_bg()
 
 
 async def _refresh_nc_bg() -> None:
