@@ -52,6 +52,7 @@ from zoneinfo import ZoneInfo
 from utils import cloud_description
 import httpx
 import xarray as xr
+from knmi_api_key import get_anonymous_key
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +76,22 @@ NC_TTL_SECONDS = 600  # 10 minutes — matches KNMI update interval
 
 
 def _api_key() -> str:
-    key = os.getenv("KNMI_API_KEY", "")
-    if not key:
-        raise RuntimeError("KNMI_API_KEY environment variable is not set")
-    return key
+    try:
+        return get_anonymous_key()
+    except Exception as e:
+        logger.warning(
+            "Could not refresh anonymous KNMI key: %s. "
+            "Falling back to KNMI_API_KEY.",
+            e,
+        )
 
+        key = os.getenv("KNMI_API_KEY", "")
+        if not key:
+            raise RuntimeError(
+                "No anonymous key available and KNMI_API_KEY is not set."
+            )
+
+        return key
 
 def _headers() -> dict:
     return {"Authorization": _api_key()}
