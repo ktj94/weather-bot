@@ -330,11 +330,22 @@ async def _fetch_nc_bytes() -> tuple[str, bytes]:
 # NC file parsing
 # ---------------------------------------------------------------------------
 
+_NEEDED_VARS = {"ta", "rh", "ff", "dd", "n", "stationname", "lat", "lon"}
+
+
 def _open_nc_file(path: Path) -> xr.Dataset:
-    """Open an NC file from disk, load into memory, close file handle."""
-    ds = xr.open_dataset(str(path))
-    ds.load()
-    ds.close()
+    """Open an NC file, keep only needed variables, load into memory.
+
+    KNMI 10-minute observation files contain dozens of variables.
+    Loading them all can exceed the container's memory limit and crash
+    the process. We drop everything except the 8 variables used by
+    _extract_from_ds and _build_station_cache_from_ds before calling
+    load(). Coordinates (station, time) are preserved automatically.
+    """
+    with xr.open_dataset(str(path)) as full:
+        to_drop = [v for v in full.data_vars if v not in _NEEDED_VARS]
+        ds = full.drop_vars(to_drop, errors="ignore")
+        ds.load()
     return ds
 
 
